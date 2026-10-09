@@ -2,31 +2,21 @@ import {
 	AmbientLight, BufferGeometry, Clock, DirectionalLight, MathUtils, Mesh, PerspectiveCamera,
 	Raycaster, Scene, Vector3, WebGLRenderer,
 } from 'three';
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { TilesRenderer } from '3d-tiles-renderer';
-import { GLTFExtensionsPlugin, GoogleCloudAuthPlugin, ReorientationPlugin } from '3d-tiles-renderer/plugins';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
+import { Craters } from './craters';
 import { Player, groundBelow, type Input } from './player';
+import { Weapons, type WeaponKind } from './weapons';
+import { createWorld, type World, type WorldKind } from './world';
 
 BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 Mesh.prototype.raycast = acceleratedRaycast;
 
-// Launch area: Alexander St, Glendale City Center (street midpoint).
-const ORIGIN = { lat: 34.1532, lon: - 118.2672 };
-
-const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
 const statusEl = document.getElementById( 'status' )!;
 const overlayEl = document.getElementById( 'overlay' )!;
 const readoutEl = document.getElementById( 'readout' )!;
+const providerEl = document.getElementById( 'provider' )!;
 const copyrightEl = document.getElementById( 'copyright' )!;
-
-if ( ! apiKey ) {
-
-	statusEl.textContent = 'Missing VITE_GOOGLE_MAPS_API_KEY in .env.local';
-	throw new Error( 'Missing VITE_GOOGLE_MAPS_API_KEY' );
-
-}
 
 const renderer = new WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true } );
 renderer.setPixelRatio( Math.min( window.devicePixelRatio, 2 ) );
@@ -36,60 +26,89 @@ document.body.prepend( renderer.domElement );
 
 const scene = new Scene();
 scene.add( new AmbientLight( 0xffffff, 2 ) );
-const sun = new DirectionalLight( 0xffffff, 1 );
+const sun = new DirectionalLight( 0xffffff, 1.5 );
 sun.position.set( 1, 2, 1 );
 scene.add( sun );
 
-const camera = new PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 30000 );
+const camera = new PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.05, 30000 );
 camera.rotation.order = 'YXZ';
+scene.add( camera );
 
-// Google Photorealistic 3D Tiles, re-centered so the launch point is the
-// origin with +Y up. Tiles are streamed and only kept in memory.
-const tiles = new TilesRenderer();
-tiles.registerPlugin( new GoogleCloudAuthPlugin( { apiToken: apiKey, autoRefreshToken: true } ) );
-tiles.registerPlugin( new GLTFExtensionsPlugin( {
-	dracoLoader: new DRACOLoader().setDecoderPath( 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/' ),
-} ) );
-tiles.registerPlugin( new ReorientationPlugin( {
-	lat: ORIGIN.lat * MathUtils.DEG2RAD,
-	lon: ORIGIN.lon * MathUtils.DEG2RAD,
-	recenter: true,
-} ) );
-// Lower than the plugin's default of 20 so street level loads in full detail.
-tiles.errorTarget = 12;
-tiles.setCamera( camera );
-tiles.setResolutionFromRenderer( camera, renderer );
-tiles.addEventListener( 'dispose-model', ( { scene: model } ) => {
+// ?world=cesium switches from Google Photorealistic 3D Tiles to Cesium ion
+// (World Terrain + OSM Buildings + Bing imagery) for comparison.
+const kind: WorldKind = new URLSearchParams( location.search ).get( 'world' ) === 'cesium' ? 'cesium' : 'google';
+const craters = new Craters();
+let world: World;
+try {
 
-	model.traverse( obj => ( obj as Mesh ).geometry?.disposeBoundsTree?.() );
+	world = createWorld( kind, import.meta.env, renderer, camera, craters );
 
-} );
-scene.add( tiles.group );
+} catch ( error ) {
+
+	statusEl.textContent = ( error as Error ).message;
+	throw error;
+
+}
+providerEl.textContent = world.credit;
+scene.add( world.root, craters.bowls );
+
+const player = new Player();
+const weapons = new Weapons( scene, camera, world.root, craters );
+weapons.onExplosion = ( point, radius ) => {
+
+	// Knock the player away from nearby blasts.
+	const away = player.position.clone().sub( point );
+	const distance = away.length();
+	if ( distance < radius * 3 ) {
+
+		player.velocity.addScaledVector( away.normalize(), ( 1 - distance / ( radius * 3 ) ) * 12 );
+		player.velocity.y += ( 1 - distance / ( radius * 3 ) ) * 6;
+		player.grounded = false;
+
+	}
+
+};
 
 // --- input ---------------------------------------------------------------
 const keys = new Set<string>();
+const triggers = new Set<WeaponKind>();
 window.addEventListener( 'keydown', e => {
 
 	keys.add( e.code );
 	if ( e.code === 'KeyF' ) player.flying = ! player.flying;
+	if ( e.code === 'KeyX' ) craters.clear();
 
 } );
 window.addEventListener( 'keyup', e => keys.delete( e.code ) );
-window.addEventListener( 'blur', () => keys.clear() );
+window.addEventListener( 'blur', () => {
 
+	keys.clear();
+	triggers.clear();
+
+} );
+
+const locked = () => document.pointerLockElement === renderer.domElement;
 overlayEl.addEventListener( 'click', () => renderer.domElement.requestPointerLock() );
 document.addEventListener( 'pointerlockchange', () => {
 
-	overlayEl.classList.toggle( 'hidden', document.pointerLockElement === renderer.domElement );
+	overlayEl.classList.toggle( 'hidden', locked() );
+	if ( ! locked() ) triggers.clear();
 
 } );
 document.addEventListener( 'mousemove', e => {
 
-	if ( document.pointerLockElement !== renderer.domElement ) return;
+	if ( ! locked() ) return;
 	player.yaw -= e.movementX * 0.0022;
 	player.pitch = MathUtils.clamp( player.pitch - e.movementY * 0.0022, - 1.5, 1.5 );
 
 } );
+document.addEventListener( 'mousedown', e => {
+
+	if ( locked() ) triggers.add( e.button === 2 ? 'rocket' : 'rifle' );
+
+} );
+document.addEventListener( 'mouseup', e => triggers.delete( e.button === 2 ? 'rocket' : 'rifle' ) );
+document.addEventListener( 'contextmenu', e => e.preventDefault() );
 
 function readInput(): Input {
 
@@ -105,7 +124,6 @@ function readInput(): Input {
 }
 
 // --- spawn ---------------------------------------------------------------
-const player = new Player();
 const raycaster = new Raycaster();
 const SPAWN_PROBE = new Vector3( 0, 3000, 0 );
 let spawned = false;
@@ -115,9 +133,11 @@ let spawnGround = 0;
 player.position.set( 0, 400, 0 );
 player.pitch = - 1.4;
 
+const loaded = () => world.tilesets.every( t => t.loadProgress === 1 && t.visibleTiles.size > 0 );
+
 function trySpawn() {
 
-	const hit = groundBelow( tiles.group, SPAWN_PROBE, raycaster );
+	const hit = groundBelow( world.root, SPAWN_PROBE, raycaster );
 	if ( ! hit ) return;
 	spawned = true;
 	spawnGround = hit.y;
@@ -138,26 +158,36 @@ function frame() {
 
 	if ( spawned ) {
 
-		player.update( dt, readInput(), tiles.group );
+		player.update( dt, readInput(), world.root, craters );
 		if ( player.position.y < spawnGround - 200 ) trySpawn();
+		for ( const kind of triggers ) weapons.fire( kind );
 
-	} else if ( tiles.loadProgress === 1 && tiles.visibleTiles.size > 0 ) {
+	} else if ( loaded() ) {
 
 		trySpawn();
 
 	}
+	weapons.update( dt );
 
 	camera.position.copy( player.position );
 	camera.rotation.set( player.pitch, player.yaw, 0 );
+	if ( weapons.shake > 0 ) {
+
+		camera.position.x += ( Math.random() - 0.5 ) * weapons.shake * 0.4;
+		camera.position.y += ( Math.random() - 0.5 ) * weapons.shake * 0.4;
+
+	}
 	camera.updateMatrixWorld();
-	tiles.update();
+	craters.update( camera.position );
+	for ( const tiles of world.tilesets ) tiles.update();
 	renderer.render( scene, camera );
 
 	attributionTimer -= dt;
 	if ( attributionTimer <= 0 ) {
 
 		attributionTimer = 1;
-		copyrightEl.textContent = tiles.getAttributions()
+		copyrightEl.textContent = world.tilesets
+			.flatMap( t => t.getAttributions() )
 			.filter( a => a.type === 'string' ).map( a => a.value ).join( ' ' );
 
 	}
@@ -165,7 +195,7 @@ function frame() {
 	const p = player.position;
 	readoutEl.textContent = `x ${ p.x.toFixed( 1 ) }  y ${ ( p.y - spawnGround ).toFixed( 1 ) }  z ${ p.z.toFixed( 1 ) }`
 		+ `\n${ player.flying ? 'flying' : player.grounded ? 'on ground' : 'airborne' }`
-		+ `  ·  tiles ${ tiles.visibleTiles.size }`;
+		+ `  ·  craters ${ craters.list.length }`;
 
 	requestAnimationFrame( frame );
 
@@ -177,24 +207,26 @@ window.addEventListener( 'resize', () => {
 	camera.aspect = window.innerWidth / window.innerHeight;
 	camera.updateProjectionMatrix();
 	renderer.setSize( window.innerWidth, window.innerHeight );
-	tiles.setResolutionFromRenderer( camera, renderer );
+	for ( const tiles of world.tilesets ) tiles.setResolutionFromRenderer( camera, renderer );
 
 } );
 
-// Hooks for the scripted capture in tools/ (no effect during normal play).
+// Hooks for scripted captures and tests (no effect during normal play).
 Object.assign( window, {
 	__turfwar: {
 		player,
-		tiles,
-		camera,
+		world,
+		craters,
 		raycaster,
-		isReady: () => spawned && tiles.loadProgress === 1,
+		camera,
+		isReady: () => spawned && loaded(),
 		setLook( yaw: number, pitch: number ) {
 
 			player.yaw = yaw;
 			player.pitch = pitch;
 
 		},
+		fire: ( kind: WeaponKind ) => weapons.fire( kind ),
 		hideOverlay: () => overlayEl.classList.add( 'hidden' ),
 	},
 } );
