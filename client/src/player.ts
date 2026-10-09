@@ -1,6 +1,5 @@
 import { Box3, Line3, Matrix4, Mesh, Object3D, Raycaster, Vector3 } from 'three';
 import type { ExtendedTriangle } from 'three-mesh-bvh';
-import type { Craters } from './craters';
 
 // Capsule sized for a ~1.75 m player whose position is the eye point.
 const RADIUS = 0.35;
@@ -23,9 +22,6 @@ const _delta = new Vector3();
 const _center = new Vector3();
 const _move = new Vector3();
 const _down = new Vector3( 0, - 1, 0 );
-const _world = new Vector3();
-const _bottom = new Vector3();
-const _contact = new Vector3();
 
 export type Input = { forward: number, right: number, jump: boolean, sprint: boolean, up: number };
 
@@ -88,9 +84,10 @@ export class Player {
 	grounded = false;
 	flying = false;
 
-	update( dt: number, input: Input, world: Object3D, craters: Craters ) {
+	update( dt: number, input: Input, world: Object3D ) {
 
-		const speed = this.flying ? FLY_SPEED : input.sprint ? SPRINT_SPEED : WALK_SPEED;
+		// Shift sprints on foot, and flies 10x faster.
+		const speed = this.flying ? FLY_SPEED * ( input.sprint ? 10 : 1 ) : input.sprint ? SPRINT_SPEED : WALK_SPEED;
 		_move.set( input.right, 0, - input.forward );
 		if ( _move.lengthSq() > 1 ) _move.normalize();
 		_move.multiplyScalar( speed ).applyAxisAngle( new Vector3( 0, 1, 0 ), this.yaw );
@@ -117,13 +114,13 @@ export class Player {
 		}
 
 		this.position.addScaledVector( this.velocity, dt );
-		this.resolveCollisions( dt, world, craters );
+		this.resolveCollisions( dt, world );
 
 	}
 
 	// Push the capsule out of every nearby tile mesh, following the
 	// three-mesh-bvh character controller approach.
-	private resolveCollisions( dt: number, world: Object3D, craters: Craters ) {
+	private resolveCollisions( dt: number, world: Object3D ) {
 
 		const start = this.position.clone();
 		this.grounded = false;
@@ -145,8 +142,7 @@ export class Player {
 				intersectsTriangle: ( tri: ExtendedTriangle ) => {
 
 					const distance = tri.closestPointToSegment( _segment, _triPoint, _capsulePoint );
-					// Surfaces inside a crater have been blown away.
-					if ( distance < RADIUS && ! craters.inside( _world.copy( _triPoint ).applyMatrix4( mesh.matrixWorld ) ) ) {
+					if ( distance < RADIUS ) {
 
 						const depth = RADIUS - distance;
 						const direction = _capsulePoint.sub( _triPoint ).normalize();
@@ -168,8 +164,6 @@ export class Player {
 
 		}
 
-		this.resolveBowls( craters );
-
 		_delta.subVectors( this.position, start );
 		this.grounded = _delta.y > Math.abs( dt * this.velocity.y * 0.25 );
 		if ( this.grounded ) {
@@ -180,27 +174,6 @@ export class Player {
 
 			_delta.normalize();
 			this.velocity.addScaledVector( _delta, - _delta.dot( this.velocity ) );
-
-		}
-
-	}
-
-	// Inside a crater's bowl, keep the capsule's bottom sphere within it.
-	private resolveBowls( craters: Craters ) {
-
-		for ( const c of craters.list ) {
-
-			if ( c.top === null ) continue;
-			_bottom.set( 0, SEGMENT_BOTTOM, 0 ).add( this.position );
-			if ( _bottom.y > c.top ) continue;
-			_world.set( c.x, c.y, c.z );
-			const distance = _bottom.distanceTo( _world );
-			const limit = c.r - RADIUS;
-			if ( distance > c.r || distance <= limit ) continue;
-			// Skip where another crater has already removed this part of the bowl.
-			_contact.subVectors( _bottom, _world ).setLength( c.r ).add( _world );
-			if ( craters.inside( _contact, c ) ) continue;
-			this.position.addScaledVector( _contact.subVectors( _world, _bottom ).normalize(), distance - limit );
 
 		}
 

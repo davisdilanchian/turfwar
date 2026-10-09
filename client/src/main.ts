@@ -1,12 +1,14 @@
 import {
 	AmbientLight, BufferGeometry, Clock, DirectionalLight, MathUtils, Mesh, PerspectiveCamera,
-	Raycaster, Scene, Vector3, WebGLRenderer,
+	PMREMGenerator, Raycaster, Scene, Vector3, WebGLRenderer,
 } from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
 import { Craters } from './craters';
+import { Debris } from './debris';
 import { Player, groundBelow, type Input } from './player';
 import { Weapons, type WeaponKind } from './weapons';
-import { createWorld, type World, type WorldKind } from './world';
+import { ORIGIN, createWorld, latLonToWorld, type World, type WorldKind } from './world';
 
 BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -17,11 +19,14 @@ const overlayEl = document.getElementById( 'overlay' )!;
 const readoutEl = document.getElementById( 'readout' )!;
 const providerEl = document.getElementById( 'provider' )!;
 const copyrightEl = document.getElementById( 'copyright' )!;
+const crosshairEl = document.getElementById( 'crosshair' )!;
 
 const renderer = new WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true } );
 renderer.setPixelRatio( Math.min( window.devicePixelRatio, 2 ) );
 renderer.setSize( window.innerWidth, window.innerHeight );
 renderer.setClearColor( 0x9cc7e8 );
+// The world and the held weapon are drawn in two passes (see the loop).
+renderer.autoClear = false;
 document.body.prepend( renderer.domElement );
 
 const scene = new Scene();
@@ -50,10 +55,17 @@ try {
 
 }
 providerEl.textContent = world.credit;
-scene.add( world.root, craters.bowls );
+// Cavity fills live in the world so they are drawn, collided with and shot at like tiles.
+world.root.add( craters.fills );
+scene.add( world.root );
+const debris = new Debris( scene );
+craters.onDebris = ( pieces, crater ) => debris.spawn( pieces, crater );
 
 const player = new Player();
 const weapons = new Weapons( scene, camera, world.root, craters );
+// Studio lighting reflections so the weapon's metal reads well.
+weapons.viewScene.environment = new PMREMGenerator( renderer ).fromScene( new RoomEnvironment(), 0.04 ).texture;
+weapons.viewScene.environmentIntensity = 0.6;
 weapons.onExplosion = ( point, radius ) => {
 
 	// Knock the player away from nearby blasts.
@@ -77,6 +89,14 @@ window.addEventListener( 'keydown', e => {
 	keys.add( e.code );
 	if ( e.code === 'KeyF' ) player.flying = ! player.flying;
 	if ( e.code === 'KeyX' ) craters.clear();
+	if ( e.code === 'KeyR' && spawned ) {
+
+		// Back to the street spawn in front of the house.
+		const spawn = latLonToWorld( world, SPAWN.lat, SPAWN.lon );
+		spawnProbe.set( spawn.x, 3000, spawn.z );
+		trySpawn();
+
+	}
 
 } );
 window.addEventListener( 'keyup', e => keys.delete( e.code ) );
@@ -124,26 +144,101 @@ function readInput(): Input {
 }
 
 // --- spawn ---------------------------------------------------------------
+// The spawn point and the house to face come from .env.local, so the address
+// stays out of git. Without them you spawn at the launch point facing north.
+const env = import.meta.env;
+const SPAWN = { lat: Number( env.VITE_SPAWN_LAT ?? ORIGIN.lat ), lon: Number( env.VITE_SPAWN_LON ?? ORIGIN.lon ) };
+const HOME = env.VITE_HOME_LAT ? { lat: Number( env.VITE_HOME_LAT ), lon: Number( env.VITE_HOME_LON ) } : null;
 const raycaster = new Raycaster();
-const SPAWN_PROBE = new Vector3( 0, 3000, 0 );
+const spawnProbe = new Vector3();
+let spawnYaw = 0;
+let hovering = false;
+let hoverTime = 0;
 let spawned = false;
 let spawnGround = 0;
-// While waiting for the ground to load, hover above the launch point looking down
-// so the tiles underneath are the ones that stream in.
+
+// Where you were in this tab, so a dev-server reload drops you back in place.
+// sessionStorage is per tab: a fresh tab still starts at the spawn point.
+type Session = { x: number, y: number, z: number, yaw: number, pitch: number, flying: boolean };
+const SESSION_KEY = 'turfwar.session';
+let resume: Session | null = null;
+try {
+
+	resume = JSON.parse( sessionStorage.getItem( SESSION_KEY ) || 'null' );
+
+} catch {
+
+	resume = null;
+
+}
+function saveSession() {
+
+	if ( ! spawned ) return;
+	const { x, y, z } = player.position;
+	try {
+
+		sessionStorage.setItem( SESSION_KEY, JSON.stringify( { x, y, z, yaw: player.yaw, pitch: player.pitch, flying: player.flying } ) );
+
+	} catch {
+
+		// Storage unavailable; reloads will start at the spawn point.
+
+	}
+
+}
+window.addEventListener( 'pagehide', saveSession );
+// Until the tiles' frame is known, hover above the launch point looking down.
 player.position.set( 0, 400, 0 );
 player.pitch = - 1.4;
 
 const loaded = () => world.tilesets.every( t => t.loadProgress === 1 && t.visibleTiles.size > 0 );
 
+// Once the root tileset has loaded, move the hover over the spawn point so the
+// tiles under it stream in at full detail before dropping in.
+function hoverOverSpawn() {
+
+	const spawn = latLonToWorld( world, SPAWN.lat, SPAWN.lon );
+	spawnProbe.set( spawn.x, 3000, spawn.z );
+	player.position.set( spawn.x, 400, spawn.z );
+	if ( HOME ) {
+
+		const home = latLonToWorld( world, HOME.lat, HOME.lon );
+		// Forward is -Z rotated by yaw, so face the house with atan2( -dx, -dz ).
+		spawnYaw = Math.atan2( - ( home.x - spawn.x ), - ( home.z - spawn.z ) );
+
+	}
+	if ( resume ) {
+
+		spawnProbe.set( resume.x, 3000, resume.z );
+		player.position.set( resume.x, Math.max( resume.y, 400 ), resume.z );
+
+	}
+	hovering = true;
+
+}
+
 function trySpawn() {
 
-	const hit = groundBelow( world.root, SPAWN_PROBE, raycaster );
+	const hit = groundBelow( world.root, spawnProbe, raycaster );
 	if ( ! hit ) return;
 	spawned = true;
 	spawnGround = hit.y;
-	player.position.copy( hit ).y += 2;
 	player.velocity.set( 0, 0, 0 );
-	player.pitch = 0;
+	if ( resume ) {
+
+		player.position.set( resume.x, resume.y, resume.z );
+		player.yaw = resume.yaw;
+		player.pitch = resume.pitch;
+		player.flying = resume.flying;
+		resume = null;
+
+	} else {
+
+		player.position.copy( hit ).y += 2;
+		player.yaw = spawnYaw;
+		player.pitch = 0;
+
+	}
 	statusEl.textContent = 'Alexander St, Glendale';
 
 }
@@ -151,6 +246,7 @@ function trySpawn() {
 // --- loop ----------------------------------------------------------------
 const clock = new Clock();
 let attributionTimer = 0;
+let sessionTimer = 0;
 
 function frame() {
 
@@ -158,16 +254,29 @@ function frame() {
 
 	if ( spawned ) {
 
-		player.update( dt, readInput(), world.root, craters );
+		player.update( dt, readInput(), world.root );
 		if ( player.position.y < spawnGround - 200 ) trySpawn();
+		sessionTimer -= dt;
+		if ( sessionTimer <= 0 ) {
+
+			sessionTimer = 0.5;
+			saveSession();
+
+		}
 		for ( const kind of triggers ) weapons.fire( kind );
 
-	} else if ( loaded() ) {
+	} else if ( ! hovering ) {
 
-		trySpawn();
+		if ( world.tilesets[ 0 ].root ) hoverOverSpawn();
+
+	} else {
+
+		hoverTime += dt;
+		if ( hoverTime > 1.5 && loaded() ) trySpawn();
 
 	}
 	weapons.update( dt );
+	debris.update( dt );
 
 	camera.position.copy( player.position );
 	camera.rotation.set( player.pitch, player.yaw, 0 );
@@ -178,9 +287,13 @@ function frame() {
 
 	}
 	camera.updateMatrixWorld();
-	craters.update( camera.position );
+	craters.update( world.root );
 	for ( const tiles of world.tilesets ) tiles.update();
+	renderer.clear();
 	renderer.render( scene, camera );
+	renderer.clearDepth();
+	renderer.render( weapons.viewScene, camera );
+	crosshairEl.style.setProperty( '--spread', `${ 6 + weapons.spread * 14 }px` );
 
 	attributionTimer -= dt;
 	if ( attributionTimer <= 0 ) {

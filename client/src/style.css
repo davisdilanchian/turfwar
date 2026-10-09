@@ -1,7 +1,16 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; }
 canvas { display: block; }
 #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; }
-#crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px #000; }
+/* Four ticks around a center dot; --spread (set each frame) opens the gap when firing. */
+#crosshair { --spread: 6px; --len: 9px; position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+#crosshair i, #crosshair b { position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.65); }
+#crosshair i.t, #crosshair i.b { width: 2px; height: var(--len); left: -1px; }
+#crosshair i.l, #crosshair i.r { height: 2px; width: var(--len); top: -1px; }
+#crosshair i.t { bottom: var(--spread); }
+#crosshair i.b { top: var(--spread); }
+#crosshair i.l { right: var(--spread); }
+#crosshair i.r { left: var(--spread); }
+#crosshair b { width: 2px; height: 2px; left: -1px; top: -1px; border-radius: 50%; }
 #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,.45); pointer-events: auto; cursor: pointer; text-align: center; padding: 16px; }
 #overlay.hidden { display: none; }
 #overlay h1 { margin: 0 0 8px; font-size: 48px; letter-spacing: 6px; }

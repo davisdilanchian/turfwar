@@ -1,4 +1,4 @@
-import { DoubleSide, Group, MathUtils, type Mesh, type PerspectiveCamera, type WebGLRenderer } from 'three';
+import { Group, MathUtils, type Mesh, Vector3, type PerspectiveCamera, type WebGLRenderer } from 'three';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { TilesRenderer } from '3d-tiles-renderer';
 import {
@@ -30,7 +30,8 @@ const draco = new DRACOLoader().setDecoderPath( 'https://www.gstatic.com/draco/v
 
 /**
  * Builds the streamed world for `kind`, re-centered so Alexander St is the origin
- * with +Y up. Every tile mesh gets crater cutting and a collision BVH as it loads.
+ * with +Y up. Every tile mesh gets damage paint, a collision BVH and existing
+ * craters as it loads.
  * Nothing is written to disk.
  */
 export function createWorld( kind: WorldKind, env: ImportMetaEnv, renderer: WebGLRenderer, camera: PerspectiveCamera, craters: Craters ): World {
@@ -56,18 +57,25 @@ export function createWorld( kind: WorldKind, env: ImportMetaEnv, renderer: WebG
 				const materials = Array.isArray( mesh.material ) ? mesh.material : [ mesh.material ];
 				for ( const material of materials ) {
 
-					material.side = DoubleSide;
-					craters.patch( material, 'tile' );
+					craters.patch( material );
 
 				}
 				ensureBVH( mesh );
+				craters.track( mesh );
 
 			} );
 
 		} );
 		tiles.addEventListener( 'dispose-model', ( { scene } ) => {
 
-			scene.traverse( obj => ( obj as Mesh ).geometry?.disposeBoundsTree?.() );
+			scene.traverse( obj => {
+
+				const mesh = obj as Mesh;
+				if ( ! mesh.isMesh ) return;
+				mesh.geometry.disposeBoundsTree?.();
+				craters.untrack( mesh );
+
+			} );
 
 		} );
 		tilesets.push( tiles );
@@ -108,5 +116,19 @@ export function createWorld( kind: WorldKind, env: ImportMetaEnv, renderer: WebG
 	buildings.errorTarget = 4;
 
 	return { kind, root, tilesets, credit: 'Cesium ion' };
+
+}
+
+/**
+ * Converts latitude/longitude (degrees, on the ellipsoid surface) into the local
+ * world frame. Only valid once the first tileset's root has loaded.
+ */
+export function latLonToWorld( world: World, lat: number, lon: number, target = new Vector3() ) {
+
+	const tiles = world.tilesets[ 0 ];
+	tiles.group.updateMatrixWorld();
+	return tiles.ellipsoid
+		.getCartographicToPosition( lat * MathUtils.DEG2RAD, lon * MathUtils.DEG2RAD, 0, target )
+		.applyMatrix4( tiles.group.matrixWorld );
 
 }
