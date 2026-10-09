@@ -1,0 +1,9 @@
+{
+  "name": "turfwar",
+  "private": true,
+  "workspaces": ["client"],
+  "scripts": {
+    "dev": "npm run dev -w client",
+    "build": "npm run build -w client"
+  }
+}
