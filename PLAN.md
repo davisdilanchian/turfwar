@@ -1,6 +1,6 @@
 # Turfwar: Game Plan & Tech Stack
 
-*Draft v0.4, 2026-10-09. A just-for-fun project: get it playable quickly, and only build for scale if it takes off. Items marked **OPEN** need a design decision. Decisions are logged in §12. The earlier, heavier plan (own capture, Gaussian splats, voxel world, Rust servers) is in git history at commit `d42c1f2`.*
+*Draft v0.5, 2026-10-09. A just-for-fun project: get it playable quickly, and only build for scale if it takes off. Items marked **OPEN** need a design decision. Decisions are logged in §12. The earlier, heavier plan (own capture, Gaussian splats, voxel world, Rust servers) is in git history at commit `d42c1f2`.*
 
 ---
 
@@ -200,6 +200,24 @@ Google's buildings have no floors, so walking into a blasted building would drop
 
 **Gray areas, honestly.** Collision built on a server (rather than a player's display) and cutting holes in Google's rendered surfaces aren't explicitly allowed or forbidden. Runtime collision on these tiles is common practice: Cesium for Unreal does it by default, including on dedicated servers. For a private, just-for-fun project, the realistic worst case is Google disabling the API key. If this ever goes public or commercial, get the Maps Platform terms reviewed. This isn't legal advice.
 
+### 7.1 Fallback providers (if Google becomes a problem)
+Evaluated 2026-10-09.
+- **Google is the default** because it's the easiest to access and nearly free at friends-scale.
+- **Google's pricing is per session, not per area.** A session is one player streaming any amount of map for up to 3 hours. The first 1,000 sessions a month are free, then about $6 per 1,000, so about $0.006 per player session no matter how many square miles they load.
+
+| Provider | What you get | Cost | Can we store and modify it? |
+|---|---|---|---|
+| **Cesium ion** (Cesium OSM Buildings + Cesium World Terrain) | Global 3D building and terrain tiles, streamed | Community $0 (15 GB/month streaming; personal, non-commercial use only). Commercial $149/month (150 GB). Premium $499/month (500 GB). A public app used by outsiders means contacting Cesium about integration licensing | Streaming only. Bulk download of OSM Buildings needs their enterprise self-hosted license. Clips (up to 25 km² each, 10 a month free) work for World Terrain |
+| **Mantle Place** | A downloaded bundle per area: building meshes (glTF), terrain (1 m in the US), aerial imagery (NAIP in the US) | $5 + $2 per km²; 2 km² and under is free | Yes: you keep the files, commercial and offline use allowed. No API |
+| **Overture Maps + AWS Terrain Tiles** | Building outlines with heights (91% of buildings in the Glendale box have heights), plus global terrain | Free | Yes, with credit (ODbL) |
+
+**Cesium cost per square mile** (rough estimates, derived from Cesium's published global dataset sizes):
+- **Buildings:** about 600 bytes per building (207.7 GB for ~350M buildings). Glendale has ~4,000 buildings per sq mi, so about 2.4 MB per sq mi.
+- **Terrain:** about 45 KB per sq mi on average (2.5 TB over Earth's land).
+- **Per player:** about 2.5–3 MB each time a player loads a square mile.
+- **Monthly:** the free tier covers about 5,000 such loads a month. The $149 plan covers about 50,000, which works out to roughly $0.003 per player per square mile.
+- **Imagery** (Bing) is counted as sessions, not bytes, and can't be clipped.
+
 ---
 
 ## 8. Tech stack (quick version)
@@ -259,7 +277,7 @@ turfwar/
 | Client and server load slightly different tiles, so collision disagrees | Both use full detail near players; the server is authoritative; prediction corrections are small |
 | Melty street-level geometry (blob trees you can stand on, bumpy ground) | Character controller with step-up and slope limits; accept the rest |
 | Hollow buildings feel odd once you're inside | Dark interiors and the DEM floor. Later: simple procedural floors |
-| Google disables the key or changes pricing | Stay inside the rules in §7, with budget alerts. The heavier own-data plan in commit `d42c1f2` is the fallback |
+| Google disables the key or changes pricing | Stay inside the rules in §7, with budget alerts. Fallbacks are listed in §7.1: Cesium ion, Mantle Place, or Overture |
 | API key stolen from the client and abused | Domain restriction, quotas, budget alerts |
 | Too few players for a persistent world | Bots, Arenas, and a bounded launch area |
 
@@ -299,6 +317,7 @@ Revisit the heavier plan in commit `d42c1f2`:
 | 2026-10-09 | No exclusion zones; one protected house can't be destroyed (footprint ID in private config) |
 | 2026-10-09 | **World = Google Photorealistic 3D Tiles**, streamed live, never stored; collision built in memory; craters stored as our own data. *Supersedes the own-capture / splat / voxel plan (commit `d42c1f2`).* |
 | 2026-10-09 | Just-for-fun scope: TypeScript everywhere, one server, WebSockets, Supabase |
+| 2026-10-09 | Alternatives evaluated (Cesium ion, Mantle Place, Overture). Staying with Google for now because it's easiest to access; the others are kept as fallbacks (§7.1) |
 
 ---
 
