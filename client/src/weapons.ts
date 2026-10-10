@@ -9,7 +9,7 @@ import { createViewmodel } from './viewmodel';
 
 export type WeaponKind = 'rifle' | 'rocket';
 
-const RIFLE = { interval: 0.1, range: 400, holeRadius: 0.3 };
+const RIFLE = { interval: 0.1, range: 400, holeRadius: 0.25 };
 const ROCKET = { interval: 0.9, speed: 70, gravity: 6, radius: 2.2, life: 6 };
 
 export type Hit = { point: Vector3, normal: Vector3, distance: number };

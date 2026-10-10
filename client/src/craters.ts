@@ -1,5 +1,5 @@
 import {
-	Box3, BufferAttribute, BufferGeometry, Color, Group, Matrix4, Mesh, MeshBasicMaterial, Sphere, Vector3,
+	Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Matrix4, Mesh, MeshBasicMaterial, Sphere, Vector3,
 	type Object3D,
 } from 'three';
 import type { MeshBVH } from 'three-mesh-bvh';
@@ -56,7 +56,8 @@ export class Craters {
 	private fresh = new Set<Crater>();
 	private boxes: CellBox[] = [];
 	private entries = new Map<string, Entry>();
-	private material = new MeshBasicMaterial( { vertexColors: true } );
+	// Both sides, so the odd flipped triangle at a crater rim never shows as a gap.
+	private material = new MeshBasicMaterial( { vertexColors: true, side: DoubleSide } );
 	private time = 0;
 
 	constructor() {

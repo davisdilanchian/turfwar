@@ -19,6 +19,8 @@ export const H = 0.2;
 export const CHUNK = 12;
 // Upward surfaces this close to street level count as ground (filled underneath).
 const GROUND_RISE = 1.2;
+// Surfaces are thickened by this many voxels on each side (1 → about 60 cm walls).
+const SHELL = 1;
 const FALLBACK = new Color( 0x8a7a66 );
 const BROWN = new Color( 0.62, 0.48, 0.34 );
 const LIGHT = new Vector3( 0.4, 0.85, 0.35 ).normalize();
@@ -176,6 +178,21 @@ export class Region {
 
 		}
 
+		// Give every surface real thickness (SHELL voxels each way), so shots eat into
+		// walls, roofs and trees before breaking through.
+		const thick = new Uint8Array( surface.length );
+		for ( let i = 0; i < nx; i ++ ) for ( let j = 0; j < ny; j ++ ) for ( let k = 0; k < nz; k ++ ) {
+
+			if ( ! surface[ this.id( i, j, k ) ] ) continue;
+			for ( let di = - SHELL; di <= SHELL; di ++ ) for ( let dj = - SHELL; dj <= SHELL; dj ++ ) for ( let dk = - SHELL; dk <= SHELL; dk ++ ) {
+
+				const a = i + di, b = j + dj, c = k + dk;
+				if ( a >= 0 && b >= 0 && c >= 0 && a < nx && b < ny && c < nz ) thick[ this.id( a, b, c ) ] = 1;
+
+			}
+
+		}
+
 		// Fill under the ground: below the lowest surface in each column if that's
 		// near street level, and always below street level itself.
 		for ( let i = 0; i < nx; i ++ ) for ( let k = 0; k < nz; k ++ ) {
@@ -193,7 +210,7 @@ export class Region {
 				const n = this.id( i, j, k );
 				const y = ( box.y0 + j + 0.5 ) * H;
 				const underGround = lowest >= 0 && lowestY < floor + GROUND_RISE ? j < lowest : y < floor;
-				this.solid[ n ] = surface[ n ] || underGround ? 1 : 0;
+				this.solid[ n ] = thick[ n ] || underGround ? 1 : 0;
 
 			}
 
@@ -279,7 +296,9 @@ export class Region {
 		const positions: number[] = [];
 		const colors: number[] = [];
 		const exposed: number[] = [];
-		const lo = worldBox( box ).min, hi = worldBox( box ).max;
+		// Clamp to the box faces, plus a hair of overlap with the cut tiles so no
+		// sliver of sky shows along the seam.
+		const lo = worldBox( box ).min.subScalar( 0.03 ), hi = worldBox( box ).max.addScalar( 0.03 );
 		const offsets = [ [ 0, 0, 0 ], [ 1, 0, 0 ], [ 0, 1, 0 ], [ 1, 1, 0 ], [ 0, 0, 1 ], [ 1, 0, 1 ], [ 0, 1, 1 ], [ 1, 1, 1 ] ];
 		const edges = [ [ 0, 1 ], [ 2, 3 ], [ 4, 5 ], [ 6, 7 ], [ 0, 2 ], [ 1, 3 ], [ 4, 6 ], [ 5, 7 ], [ 0, 4 ], [ 1, 5 ], [ 2, 6 ], [ 3, 7 ] ];
 		const p = new Vector3();
