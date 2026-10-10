@@ -287,7 +287,7 @@ function frame() {
 
 	}
 	camera.updateMatrixWorld();
-	craters.update( world.root );
+	craters.update( world.root, dt );
 	for ( const tiles of world.tilesets ) tiles.update();
 	renderer.clear();
 	renderer.render( scene, camera );

@@ -30,8 +30,7 @@ const draco = new DRACOLoader().setDecoderPath( 'https://www.gstatic.com/draco/v
 
 /**
  * Builds the streamed world for `kind`, re-centered so Alexander St is the origin
- * with +Y up. Every tile mesh gets damage paint, a collision BVH and existing
- * craters as it loads.
+ * with +Y up. Every tile mesh gets a collision BVH and existing craters as it loads.
  * Nothing is written to disk.
  */
 export function createWorld( kind: WorldKind, env: ImportMetaEnv, renderer: WebGLRenderer, camera: PerspectiveCamera, craters: Craters ): World {
@@ -54,12 +53,6 @@ export function createWorld( kind: WorldKind, env: ImportMetaEnv, renderer: WebG
 
 				const mesh = obj as Mesh;
 				if ( ! mesh.isMesh ) return;
-				const materials = Array.isArray( mesh.material ) ? mesh.material : [ mesh.material ];
-				for ( const material of materials ) {
-
-					craters.patch( material );
-
-				}
 				ensureBVH( mesh );
 				craters.track( mesh );
 
